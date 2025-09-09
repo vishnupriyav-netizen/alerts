@@ -1,0 +1,76 @@
+-- issue1 - it is not segresgated on organic, inorgani
+-- issue2 - receiving some false positives and not receing true alrms.
+-- not based hourly level. 
+
+with numer as (
+    select toDate(payin_created_at) as date,
+           error_code,
+           provider,
+           countDistinct(payment_attempt_id) as error_counts
+    from payin
+    where toDate(payin_created_at) >= today() - 30
+      and error_code != '0'
+    group by 1,2,3
+),
+denom as (
+    select error_code,
+           provider,
+           countDistinct(payment_attempt_id) as error_count_total
+    from payin
+    where toDate(payin_created_at) >= today() - 30
+      and error_code != '0'
+    group by 1,2
+),
+base as (
+    select a.date,
+           a.error_code,
+           a.provider,
+           error_counts,
+           round((a.error_counts * 100.0) / b.error_count_total, 2) as error_rate
+    from numer a 
+    left join denom b on a.error_code = b.error_code and a.provider = b.provider
+),
+rolling_stats as (
+    select date,
+           error_code, 
+           provider,
+           error_rate,
+           error_counts,
+           quantile(0.5)(error_rate) over (
+               partition by error_code, provider 
+               order by date 
+               rows between 14 preceding and 1 preceding
+           ) as rolling_med,
+           stddevPop(error_rate) over (
+               partition by error_code, provider 
+               order by date 
+               rows between 14 preceding and 1 preceding
+           ) as rolling_stddev
+    from base
+),
+final as (
+    select date,
+           error_code,
+           provider,
+           error_rate,
+           error_counts,
+           rolling_med,
+           rolling_stddev,
+           case when rolling_stddev > 0 then (error_rate - rolling_med) / rolling_stddev end as z_score,
+           1.5 * rolling_stddev as threshold
+    from rolling_stats
+  where date = toDate('2025-09-02') 
+    -- where date >= toDate('2025-08-01') and error_code = 15005 and provider = 'wepayments'
+    
+    -- tisk
+        -- where date >= toDate('2025-08-01') and error_code = 13516 and provider = 'rapyd_uk'
+        -- where date >= toDate('2025-08-01') and error_code = 13611 and provider = 'rapyd_uk'
+        -- where date = toDate('2025-08-24')
+-- unlimit issue
+-- where date = toDate('2025-08-17')
+-- rapyd issue
+-- where date = toDate('2025-08-18') 
+)
+select * from final where z_score is not null
+order by z_score desc;
+
