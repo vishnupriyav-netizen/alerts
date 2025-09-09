@@ -1,0 +1,76 @@
+-- top currency 
+with top_currency as (
+select charge_currency as top_currency, payment_method_name as method, provider,
+countDistinct(case when payment_attempt_id is not null then payin_id end) as traffic
+from payin 
+where date(payin_created_at) >= '2025-08-10' and date(payin_created_at) < '2025-09-10'
+group by 1,2,3
+order by traffic desc limit 10
+),
+
+current_traffic as (
+select a.top_currency, a.method, a.provider, 
+toDate(b.payin_created_at) as current_date, 
+toHour(b.payin_created_at) as current_hour,
+floor(toMinute(b.payin_created_at)/30) as current_half_hour,
+countDistinct(case when b.payment_attempt_id is not null then payin_id end) as current_traffic
+from top_currency a 
+join payin b on a.top_currency = b.charge_currency and a.method = b.payment_method_name and a.provider = b.provider
+and date(b.payin_created_at) >= '2025-08-20' and date(payin_created_at) < '2025-09-10'
+group by 1,2,3,4,5,6
+),
+-- missing for sept 24 (21 data points) and current day 
+
+-- select * from current_traffic
+-- where current_date = '2025-08-24' and top_currency = 'PHP'
+-- -- and method = 'QR'
+-- and provider = 'xendit' 
+
+
+historic_traffic as (
+select a.top_currency, a.method, a.provider, 
+toDate(b.payin_created_at) as historic_date, 
+toHour(b.payin_created_at) as hour,
+floor(toMinute(b.payin_created_at)/30) as half_hour,
+countDistinct(case when b.payment_attempt_id is not null then payin_id end) as historic_traffic
+from top_currency a 
+join payin b on a.top_currency = b.charge_currency and a.method = b.payment_method_name and a.provider = b.provider
+and date(b.payin_created_at) >= '2025-08-10' and date(payin_created_at) < '2025-09-10'
+group by 1,2,3,4,5,6
+),
+
+-- select * from historic_traffic
+-- where  top_currency = 'PLN'
+-- and method = 'BLIK'
+-- and provider = 'ppro' 
+
+final as (
+select a.*, 
+    quantile(0.5)(b.historic_traffic) AS median,
+    stddevPop(b.historic_traffic) AS stddev
+
+from current_traffic a 
+left join historic_traffic b on 
+a.top_currency = b.top_currency and a.method = b.method and a.provider = b.provider and 
+a.current_hour = b.hour and a.current_half_hour = b.half_hour and 
+b.historic_date between a.current_date - 20 AND a.current_date - 1
+
+group by 1,2,3,4,5,6,7)
+
+select *,  
+median - current_traffic as difference, 
+1.5*stddev as threshold ,
+case when (median - current_traffic) > 1.5*stddev then 'beyond_threshold' else null end as status
+from final 
+
+
+
+
+
+
+
+
+
+
+
+
