@@ -1,0 +1,51 @@
+-- live for more than a week 
+-- this use avergae
+
+with base as (
+select toDate(payin_created_at) as date,
+error_code,
+provider,
+countDistinct(payment_attempt_id) as error_count
+from payin
+where toDate(payin_created_at) >= today() - 30
+and error_code <> '0'
+group by 1,2,3
+),
+rolling_stats as (
+select date,
+error_code,
+provider,
+error_count,
+avg(error_count) over (
+partition by error_code, provider
+order by date
+rows between 14 preceding and 1 preceding
+) as rolling_avg,
+stddevPop(error_count) over (
+partition by error_code, provider
+order by date
+rows between 14 preceding and 1 preceding
+) as rolling_stddev
+from base
+),
+final as (
+select date,
+error_code,
+provider,
+error_count,
+rolling_avg,
+rolling_stddev,
+case when rolling_stddev > 0 then (error_count - rolling_avg) / rolling_stddev end as z_score
+from rolling_stats
+-- where date = today()
+-- xendit issue
+where date = toDate('2025-09-05')
+-- unlimit issue
+-- where date = toDate('2025-08-17')
+-- rapyd issue
+-- where date = toDate('2025-08-18')
+)
+select *
+from final
+order by z_score desc
+limit 20;
