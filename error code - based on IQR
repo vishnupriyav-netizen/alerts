@@ -1,0 +1,80 @@
+-- using IQR 
+WITH numer AS (
+    SELECT
+        toDate(payin_created_at) AS date,
+        provider,
+        countDistinct(payment_attempt_id) AS error_counts
+    FROM payin
+    -- WHERE toDate(payin_created_at) >= today() - 30
+    WHERE toDate(payin_created_at) >= date('2025-08-15') - 30
+      AND error_code >= 14000
+      AND error_code < 16000
+      AND error_code != '0'
+    GROUP BY 1, 2
+),
+denom AS (
+    SELECT
+        provider,
+        countDistinct(payment_attempt_id) AS error_count_total
+    FROM payin
+    -- WHERE toDate(payin_created_at) >= today() - 30
+     WHERE toDate(payin_created_at) >= date('2025-08-15') - 30
+      AND error_code >= 14000
+      AND error_code < 16000
+      AND error_code != '0'
+    GROUP BY 1
+),
+base AS (
+    SELECT
+        a.date,
+        a.provider,
+        error_counts,
+        round((a.error_counts * 100.0) / b.error_count_total, 2) AS error_rate
+    FROM numer a
+    LEFT JOIN denom b ON a.provider = b.provider
+),
+-- This CTE calculates Q1 and Q3 for each day and provider using a self-join
+quartile_calc AS (
+    SELECT
+        t1.date,
+        t1.provider,
+        quantile(0.25)(t2.error_rate) AS q1,
+        quantile(0.75)(t2.error_rate) AS q3
+    FROM base AS t1
+    JOIN base AS t2
+        ON t1.provider = t2.provider
+        AND t2.date BETWEEN t1.date - 14 AND t1.date - 1
+    GROUP BY
+        t1.date,
+        t1.provider
+),
+-- Join quartiles back and define anomaly bounds
+final AS (
+    SELECT
+        b.date,
+        b.provider,
+        b.error_rate,
+        b.error_counts,
+        qc.q1,
+        qc.q3,
+        (qc.q3 - qc.q1) AS iqr,
+        (qc.q1 - 1.5 * (qc.q3 - qc.q1)) AS lower_bound,
+        (qc.q3 + 1.5 * (qc.q3 - qc.q1)) AS upper_bound
+    FROM base AS b
+    LEFT JOIN quartile_calc AS qc
+        ON b.date = qc.date AND b.provider = qc.provider
+    WHERE b.date >= date('2025-08-15') -- Filter for recent data
+)
+-- Select only the rows where the error rate is outside the defined bounds
+SELECT
+    date,
+    provider,
+    error_rate,
+    error_counts,
+    lower_bound,
+    upper_bound
+FROM final
+WHERE error_rate < lower_bound OR error_rate > upper_bound
+ORDER BY
+    date DESC,
+    provider;
