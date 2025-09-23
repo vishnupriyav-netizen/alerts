@@ -1,0 +1,53 @@
+-- p0 - payout - inrognaic error backtesting
+
+
+with top_combinations as (
+select 
+destination_currency, transfer_type, final_rail_used, 
+count(distinct payout_id) as payout_count
+from datamart_payout 
+where  payout_created_at >= now() - interval 30 day and payout_attempt_id <> '' and updated_by = 'system'
+group by 1,2,3
+order by payout_count desc  
+limit 10
+), 
+
+historical_traffic as (
+select destination_currency, transfer_type, final_rail_used, 
+toDate(b.payout_created_at) as date,
+toHour(b.payout_created_at) as hour,
+intDiv(toMinute(b.payout_created_at), 30) as half_hour,
+count(distinct payout_id) as payout_count, 
+
+
+round(count(distinct case when payout_status = 'failed' then payout_id else null end) * 1.0 / 
+    nullif(count(distinct case when payout_attempt_id <> '' then payout_id else null end), 0), 3) as fr,
+    
+
+round(count(distinct case when payout_status = 'failed' 
+and (error_code in ('25000','25001','25002','25003','25004','25005','25006','25007','25008','25009','25010','25011','25502','25503','25504','25507','25508','25509','25510','25511','25516','25519','25520','25521','25523',
+'25525','25526','25527','25528','25529','25530','25531','25535','25536','25537','25538','25539','25540','25541','25542','25543','25544','25545','25546','25547','25548','25549','25550','25551','25552','25553','25554','25555',
+'25556','25557','PO1001','PO1005','PO1006','PO1007','PO1008','PO1000','PO1009','PO1010','PO1012','25505','25517','25518','25533','25534') or 
+failure_code in ('PO1001','PO1005','PO1006','PO1007','PO1008','PO1000','PO1009','PO1010','PO1012')
+then payout_id else null end) * 1.0 / 
+    nullif(count(distinct case when payout_attempt_id <> '' then payout_id else null end), 0), 3) as inorganic_fr
+
+
+from top_combinations a
+left join datamart_payout b on 
+
+a.destination_currency = b.destination_currency
+and a.transfer_type = b.transfer_type
+and a.final_rail_used = b.final_rail_used
+
+and b.payout_created_at >= now() - interval 30 day
+
+group by a.destination_currency, a.transfer_type, a.final_rail_used, date, hour, half_hour
+)
+
+
+select * from historical_traffic
+
+
+
+
